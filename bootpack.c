@@ -1,106 +1,91 @@
-void io_hlt(void);
-void io_cli(void);
-void io_out8(int port, int data);
-int io_load_eflags(void);
-void io_store_eflags(int eflags);
+#include <stdio.h>
+#include "bootpack.h"
 
-void init_palette(void);
-void set_palette(int start, int end, unsigned char *rgb);
-void boxfill8(unsigned char *vram, int xsize, unsigned char c, int x0, int y0, int x1, int y1);
-
-#define COL8_000000 0
-#define COL8_FF0000	1
-#define COL8_00FF00	2
-#define COL8_FFFF00	3
-#define COL8_0000FF	4
-#define COL8_FF00FF	5
-#define COL8_00FFFF	6
-#define COL8_FFFFFF	7
-#define COL8_C6C6C6	8
-#define COL8_840000	9
-#define COL8_008400	10
-#define COL8_848400	11
-#define COL8_000084	12
-#define COL8_840084	13
-#define COL8_008484	14
-#define COL8_848484	15
+extern struct FIFO8 keyfifo ;
+extern struct FIFO8 mousefifo;
+void wait_KBC_sendready(void);
+void init_keyboard(void);
+void enable_mouse(void);
 
 void HariMain(void){
-    char *vram;
-	int xsize, ysize;
+    struct BOOTINFO *binfo = (struct BOOTINFO *) 0x0ff0;
+    char *s[40], mcursor[256], keybuf[32], mousebuf[128];
+	int mx, my, i;
+
+    init_gdtidt();
+	init_pic();
+	io_sti();
+	fifo8_init(&keyfifo, 32, keybuf);
+	fifo8_init(&mousefifo, 128, mousebuf);
+	io_out8(PIC0_IMR, 0xf9); /* PIC1とキーボードを許可(11111001) */
+	io_out8(PIC1_IMR, 0xef); /* マウスを許可(11101111) */
+
+	init_keyboard();
 
 	init_palette();
-	vram = (char *) 0xa0000;
-	xsize = 320;
-	ysize = 200;
+	init_screen8(binfo->vram, binfo->scrnx, binfo->scrny);
+    mx = (binfo->scrnx - 16) / 2; /* 画面中央になるように座標計算 */
+	my = (binfo->scrny - 28 - 16) / 2;
+	init_mouse_cursor8(mcursor, COL8_008484);
+	putfonts8_asc(binfo->vram, binfo->scrnx, 16, 32, COL8_000000, "DemiOS");
+	putfonts8_asc(binfo->vram, binfo->scrnx, 15, 31, COL8_FFFFFF, "DemiOS");
+	putblock8_8(binfo->vram, binfo->scrnx, 16, 16, mx, my, mcursor, 16);
+	sprintf(s, "(%d, %d)", mx, my);
+	putfonts8_asc(binfo->vram, binfo->scrnx, 0, 0, COL8_FFFFFF, s);
 
-	boxfill8(vram, xsize, COL8_008484, 0, 0, xsize -  1, ysize - 29);
-	boxfill8(vram, xsize, COL8_C6C6C6, 0, ysize - 28, xsize - 1, ysize - 28);
-	boxfill8(vram, xsize, COL8_FFFFFF, 0, ysize - 27, xsize - 1, ysize - 27);
-	boxfill8(vram, xsize, COL8_C6C6C6, 0, ysize - 26, xsize - 1, ysize - 1);
-
-	boxfill8(vram, xsize, COL8_FFFFFF, 3, ysize - 24, 59, ysize - 24);
-	boxfill8(vram, xsize, COL8_FFFFFF, 2, ysize - 24,  2, ysize - 4);
-	boxfill8(vram, xsize, COL8_848484, 3, ysize -  4, 59, ysize - 4);
-	boxfill8(vram, xsize, COL8_848484, 59, ysize - 23, 59, ysize - 5);
-	boxfill8(vram, xsize, COL8_000000, 2, ysize -  3, 59, ysize - 3);
-	boxfill8(vram, xsize, COL8_000000, 60, ysize - 24, 60, ysize - 3);
-
-	boxfill8(vram, xsize, COL8_848484, xsize - 47, ysize - 24, xsize - 4, ysize - 24);
-	boxfill8(vram, xsize, COL8_848484, xsize - 47, ysize - 23, xsize - 47, ysize - 4);
-	boxfill8(vram, xsize, COL8_FFFFFF, xsize - 47, ysize - 3, xsize - 4, ysize - 3);
-	boxfill8(vram, xsize, COL8_FFFFFF, xsize - 3, ysize - 24, xsize - 3, ysize - 3);
+	enable_mouse();
 
 	for (;;) {
-		io_hlt();
+		io_cli();
+		if (fifo8_status(&keyfifo) + fifo8_status(&mousefifo)== 0){
+			io_stihlt();
+		} else {
+			if (fifo8_status(&keyfifo) != 0){
+				i = fifo8_get(&keyfifo);
+				io_sti();
+				sprintf(s, "%02X", i);
+				boxfill8(binfo->vram, binfo->scrnx, COL8_008484, 0, 16, 15, 31);
+				putfonts8_asc(binfo->vram, binfo->scrnx, 0, 16, COL8_FFFFFF, s);
+			} else if (fifo8_status(&mousefifo) != 0){
+				i = fifo8_get(&mousefifo);
+				io_sti();
+				sprintf(s, "%02X", i);
+				boxfill8(binfo->vram, binfo->scrnx, COL8_008484, 32, 16, 47, 31);
+				putfonts8_asc(binfo->vram, binfo->scrnx, 32, 16, COL8_FFFFFF, s);
+			}
+		}
 	}
 }
 
+#define PORT_KEYDAT				0x0060
+#define PORT_KEYSTA				0x0064
+#define PORT_KEYCMD				0x0064
+#define KEYSTA_SEND_NOTREADY	0x02
+#define KEYCMD_WRITE_MODE		0x60
+#define KBC_MODE				0x47
 
-void init_palette(void){
-    static unsigned char table_rgb[16*3] = {
-        0x00, 0x00, 0x00,
-        0xff, 0x00, 0x00,
-        0x00, 0xff, 0x00,
-        0xff, 0xff, 0x00,
-        0x00, 0x00, 0xff,
-        0xff, 0x00, 0xff,
-        0x00, 0xff, 0xff,
-        0xff, 0xff, 0xff,
-        0xc6, 0xc6, 0xc6,
-        0x84, 0x00, 0x00,
-        0x00, 0x84, 0x00,
-        0x84, 0x84, 0x00,
-        0x00, 0x00, 0x84,
-        0x84, 0x00, 0x84,
-        0x00, 0x84, 0x84,
-        0x84, 0x84, 0x84
-    };
-    set_palette(0,15,table_rgb);
-    return;
-}
-
-
-void set_palette(int start, int end, unsigned char *rgb){
-    int i, eflags;
-    eflags = io_load_eflags();
-    io_cli();
-    io_out8(0x03c8, start);
-    for(i = start; i <= end; i++){
-        io_out8(0x03c9, rgb[0]/4);
-        io_out8(0x03c9, rgb[1]/4);
-        io_out8(0x03c9, rgb[2]/4);
-        rgb += 3;
-    }
-    io_store_eflags(eflags);
-    return;
-}
-
-void boxfill8(unsigned char *vram, int xsize, unsigned char c, int x0, int y0, int x1, int y1){
-	int x, y;
-	for (y = y0; y <= y1; y++) {
-		for (x = x0; x <= x1; x++)
-			vram[y * xsize + x] = c;
+void wait_KBC_sendready(void){
+	for (;;){
+		if((io_in8(PORT_KEYSTA) & KEYSTA_SEND_NOTREADY) ==0){
+			break;
+		}
 	}
 	return;
+}
+
+void init_keyboard(void){
+	wait_KBC_sendready();
+	io_out8(PORT_KEYCMD, KEYCMD_WRITE_MODE);
+	wait_KBC_sendready();
+	io_out8(PORT_KEYDAT, KBC_MODE);
+	return;
+}
+
+#define KEYCMD_SENDTO_MOUSE	0xd4
+#define	MOUSECMD_ENABLE	0xf4
+void enable_mouse(void){
+	wait_KBC_sendready();
+	io_out8(PORT_KEYCMD, KEYCMD_SENDTO_MOUSE);
+	wait_KBC_sendready();
+	io_out8(PORT_KEYDAT, MOUSECMD_ENABLE);
 }
