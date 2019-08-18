@@ -1,5 +1,5 @@
 OBJS_BOOTPACK = bootpack.obj naskfunc.obj hankaku.obj graphic.obj dsctbl.obj \
-	int.obj fifo.obj
+	int.obj fifo.obj keyboard.obj mouse.obj
 
 TOOLPATH = ./z_tools/
 INCPATH  = ./z_tools/haribote/
@@ -79,7 +79,7 @@ run :
 
 install :
 	$(MAKE) img
-	$(IMGTOL) w a: haribote.img
+	$(IMGTOL) w a:haribote.img
 
 clean :
 	-$(DEL) *.bin
